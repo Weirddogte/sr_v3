@@ -36,27 +36,28 @@ def train_one_epoch(
 ) -> dict:
     """Train one epoch with AMP and gradient clipping.
 
-    Returns dict: {loss, bce, peak_mse, zone_recall_10px}
+    Returns dict: {loss, bce, peak_mse}
+    Zone recall is not computed per-batch during training (it requires a pure-Python
+    peak-detection loop over 512 pixels x B examples and dominates step time).
+    The eval loop computes it properly over the full validation set.
     """
     model.train()
     total_loss = 0.0
     total_bce = 0.0
     total_peak_mse = 0.0
-    total_recall = 0.0
     num_batches = 0
 
     pbar = tqdm(loader, desc=f"Epoch {epoch} [train]", leave=False)
     for batch in pbar:
-        images = batch["image"].to(device, non_blocking=True)
+        images  = batch["image"].to(device, non_blocking=True)
         targets = batch["target"].to(device, non_blocking=True)
-        zone_lists = batch["zones"]
 
         optimizer.zero_grad(set_to_none=True)
 
         with torch.amp.autocast("cuda" if device.type == "cuda" else "cpu"):
-            logits = model(images)
+            logits    = model(images)
             loss_dict = loss_fn(logits, targets)
-            loss = loss_dict["loss"]
+            loss      = loss_dict["loss"]
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -64,29 +65,19 @@ def train_one_epoch(
         scaler.step(optimizer)
         scaler.update()
 
-        # Metrics (no grad needed)
-        with torch.no_grad():
-            recall_dict = metrics.zone_recall_at_k_px(
-                logits.detach(), targets.detach(), zone_lists
-            )
-
-        total_loss += loss.item()
-        total_bce += loss_dict["bce"].item()
+        total_loss     += loss.item()
+        total_bce      += loss_dict["bce"].item()
         total_peak_mse += loss_dict["peak_mse"].item()
-        total_recall += recall_dict["zone_recall_at_10px"]
-        num_batches += 1
+        num_batches    += 1
 
-        pbar.set_postfix(
-            loss=f"{loss.item():.4f}",
-            recall=f"{recall_dict['zone_recall_at_10px']:.3f}",
-        )
+        pbar.set_postfix(loss=f"{loss.item():.4f}")
 
     denom = max(num_batches, 1)
     return {
-        "loss": total_loss / denom,
-        "bce": total_bce / denom,
+        "loss":     total_loss     / denom,
+        "bce":      total_bce      / denom,
         "peak_mse": total_peak_mse / denom,
-        "zone_recall_10px": total_recall / denom,
+        "zone_recall_10px": 0.0,   # computed in eval only
     }
 
 

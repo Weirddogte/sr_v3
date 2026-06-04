@@ -255,30 +255,38 @@ def build_dataloaders(
 
     _mixup_fn = partial(mixup_collate_fn, alpha=cfg.training.mixup_alpha)
 
-    # num_workers=0: on Linux (Colab), DataLoader forks after CUDA is already
-    # initialised in the parent. Forked workers inherit a corrupted CUDA context
-    # and crash on any CUDA call, even with CPU-only tensors. Single-process
-    # loading is safe and fast enough for JPEG batches of size 8.
+    # multiprocessing_context='spawn' starts clean worker processes that do not
+    # inherit the parent's CUDA context, avoiding cudaErrorInitializationError
+    # on Linux (Colab default fork would corrupt the CUDA driver state).
+    # sr/__init__.py re-adds the package root to sys.path so workers can import.
+    _ctx = "spawn"
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.training.batch_size,
         shuffle=True,
-        num_workers=0,
+        num_workers=2,
+        persistent_workers=True,
+        prefetch_factor=2,
         collate_fn=_mixup_fn,
+        multiprocessing_context=_ctx,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.training.batch_size * 2,
         shuffle=False,
-        num_workers=0,
+        num_workers=2,
+        persistent_workers=True,
         collate_fn=eval_collate_fn,
+        multiprocessing_context=_ctx,
     )
     test_loader = DataLoader(
         test_ds,
         batch_size=cfg.training.batch_size * 2,
         shuffle=False,
-        num_workers=0,
+        num_workers=2,
+        persistent_workers=True,
         collate_fn=eval_collate_fn,
+        multiprocessing_context=_ctx,
     )
 
     print(
