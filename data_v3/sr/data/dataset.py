@@ -255,36 +255,30 @@ def build_dataloaders(
 
     _mixup_fn = partial(mixup_collate_fn, alpha=cfg.training.mixup_alpha)
 
-    _nw = 2
-    _pw = _nw > 0
-
+    # num_workers=0: on Linux (Colab), DataLoader forks after CUDA is already
+    # initialised in the parent. Forked workers inherit a corrupted CUDA context
+    # and crash on any CUDA call, even with CPU-only tensors. Single-process
+    # loading is safe and fast enough for JPEG batches of size 8.
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.training.batch_size,
         shuffle=True,
-        num_workers=_nw,
-        pin_memory=_pw,
+        num_workers=0,
         collate_fn=_mixup_fn,
-        persistent_workers=_pw,
-        prefetch_factor=2 if _nw > 0 else None,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.training.batch_size * 2,
         shuffle=False,
-        num_workers=_nw,
-        pin_memory=_pw,
+        num_workers=0,
         collate_fn=eval_collate_fn,
-        persistent_workers=_pw,
     )
     test_loader = DataLoader(
         test_ds,
         batch_size=cfg.training.batch_size * 2,
         shuffle=False,
-        num_workers=_nw,
-        pin_memory=_pw,
+        num_workers=0,
         collate_fn=eval_collate_fn,
-        persistent_workers=_pw,
     )
 
     print(
