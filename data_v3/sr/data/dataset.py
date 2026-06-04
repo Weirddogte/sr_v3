@@ -1,4 +1,5 @@
 from __future__ import annotations
+import io
 import json
 import random
 from collections import defaultdict
@@ -11,6 +12,7 @@ import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 
 from sr.config import SRConfig, ZoneLabel, ZoneRole
 from sr.data.labels import compute_heatmap_targets_batch, price_to_pixel_y
@@ -149,6 +151,19 @@ class V3SupportResistanceDataset(Dataset):
         bytes_mb = self.targets.numel() * 4 / 1024 ** 2
         print(f"[dataset] Targets on CPU ({bytes_mb:.1f} MB).")
 
+        # ------------------------------------------------------------------
+        # 4. Preload all JPEG bytes into RAM
+        # ------------------------------------------------------------------
+        # Eliminates disk I/O in __getitem__. 15K × ~50 KB ≈ 750 MB — well
+        # within Colab's RAM budget and far cheaper than per-batch disk reads.
+        self._img_cache: dict[str, bytes] = {}
+        print(f"[dataset] Preloading {N} images into RAM…")
+        for i in tqdm(self.indices, desc=f"  {split}", leave=False):
+            img_id = self.records[i]["id"]
+            self._img_cache[img_id] = (self.images_dir / f"{img_id}.jpg").read_bytes()
+        cache_mb = sum(len(v) for v in self._img_cache.values()) / 1024 ** 2
+        print(f"[dataset] Image cache: {cache_mb:.0f} MB in RAM.")
+
     # ------------------------------------------------------------------
     # Dataset interface
     # ------------------------------------------------------------------
@@ -160,9 +175,9 @@ class V3SupportResistanceDataset(Dataset):
         record_idx = self.indices[idx]
         record = self.records[record_idx]
 
-        # Load image
-        img_path = self.images_dir / f"{record['id']}.jpg"
-        image = Image.open(img_path).convert("RGB")
+        # Decode image from in-RAM bytes (no disk I/O)
+        raw = self._img_cache[record["id"]]
+        image = Image.open(io.BytesIO(raw)).convert("RGB")
         image = TF.to_tensor(image)  # [3, H, W], float32 in [0, 1]
 
         # Get precomputed target [5, H] (always CPU)
