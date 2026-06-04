@@ -56,6 +56,8 @@ def price_to_pixel_y(
     int
         Pixel row index in [0, img_height - 1].
     """
+    if price_max == price_min:
+        return img_height // 2
     pct = (price_max - price) / (price_max - price_min)
     return int(np.clip(pct * (img_height - 1), 0, img_height - 1))
 

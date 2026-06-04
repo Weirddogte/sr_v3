@@ -262,10 +262,9 @@ def run(
             save_worst_dir=worst_dir,
         )
 
-        # Scheduler step (once per epoch)
+        # Capture the LR used this epoch before advancing the schedule
+        current_lr = optimizer.param_groups[0]["lr"]
         scheduler.step()
-
-        current_lr = scheduler.get_last_lr()[0] if hasattr(scheduler, "get_last_lr") else optimizer.param_groups[0]["lr"]
 
         # ------------------------------------------------------------------
         # Logging

@@ -114,8 +114,8 @@ class V3SupportResistanceDataset(Dataset):
         # ------------------------------------------------------------------
         train_idx, val_idx, test_idx = _stratified_split(
             self.records,
-            train_frac=0.70,
-            val_frac=0.15,
+            train_frac=cfg.dataset.train_frac,
+            val_frac=cfg.dataset.val_frac,
         )
 
         split_map = {"train": train_idx, "val": val_idx, "test": test_idx}
@@ -127,11 +127,10 @@ class V3SupportResistanceDataset(Dataset):
         # 3. Precompute / cache heatmap targets  [N_split, 5, H]
         # ------------------------------------------------------------------
         N = len(self.indices)
-        H = cfg.image_height
+        H = cfg.generator.image_height
 
         if precomputed_targets is not None:
-            # Caller supplies the full tensor; slice the rows for this split
-            self.targets = precomputed_targets[:N]
+            self.targets = precomputed_targets[self.indices]
         else:
             # Compute from scratch for this split
             split_records = [self.records[i] for i in self.indices]
@@ -139,10 +138,12 @@ class V3SupportResistanceDataset(Dataset):
 
             print(f"[dataset] Precomputing heatmap targets for {split} split ({N} examples)…")
             self.targets = compute_heatmap_targets_batch(
-                records=split_records,
                 zone_lists=split_zones,
-                cfg=cfg,
-            )  # expected shape: [N, 5, H]
+                current_prices=[r["current_price"] for r in split_records],
+                price_ranges=[tuple(r["price_range"]) for r in split_records],
+                img_height=cfg.generator.image_height,
+                device=device,
+            )  # [N, 5, H]
 
         # ------------------------------------------------------------------
         # 4. Optionally pin targets on GPU (VRAM check)
@@ -182,7 +183,7 @@ class V3SupportResistanceDataset(Dataset):
         record = self.records[record_idx]
 
         # Load image
-        img_path = self.images_dir / f"{record['id']}.png"
+        img_path = self.images_dir / f"{record['id']}.jpg"
         image = Image.open(img_path).convert("RGB")
         image = TF.to_tensor(image)  # [3, H, W], float32 in [0, 1]
 
@@ -278,33 +279,36 @@ def build_dataloaders(
 
     _mixup_fn = partial(mixup_collate_fn, alpha=cfg.training.mixup_alpha)
 
+    _nw = 2
+    _pw = _nw > 0
+
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.training.batch_size,
         shuffle=True,
-        num_workers=4,
-        pin_memory=True,
+        num_workers=_nw,
+        pin_memory=_pw,
         collate_fn=_mixup_fn,
-        persistent_workers=True,
-        prefetch_factor=2,
+        persistent_workers=_pw,
+        prefetch_factor=2 if _nw > 0 else None,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.training.batch_size * 2,
         shuffle=False,
-        num_workers=4,
-        pin_memory=True,
+        num_workers=_nw,
+        pin_memory=_pw,
         collate_fn=eval_collate_fn,
-        persistent_workers=True,
+        persistent_workers=_pw,
     )
     test_loader = DataLoader(
         test_ds,
         batch_size=cfg.training.batch_size * 2,
         shuffle=False,
-        num_workers=4,
-        pin_memory=True,
+        num_workers=_nw,
+        pin_memory=_pw,
         collate_fn=eval_collate_fn,
-        persistent_workers=True,
+        persistent_workers=_pw,
     )
 
     print(
