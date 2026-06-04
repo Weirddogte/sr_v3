@@ -183,15 +183,10 @@ def run(
     loss_fn = SoftHeatmapLossV3(tcfg).to(device)
     scaler = torch.amp.GradScaler("cuda" if device.type == "cuda" else "cpu")
 
-    # ------------------------------------------------------------------
-    # Optionally compile model (torch >= 2.0)
-    # ------------------------------------------------------------------
-    try:
-        if int(torch.__version__.split(".")[0]) >= 2:
-            model = torch.compile(model)
-            print("torch.compile enabled.")
-    except Exception as exc:
-        print(f"torch.compile skipped: {exc}")
+    # torch.compile is intentionally disabled.
+    # The Inductor backend clones large activations in float32 via
+    # clone_preserve_strides(), adding ~2.2 GiB of overhead on top of the
+    # normal float16 forward tensors. On a 15 GiB T4 this reliably OOMs.
 
     # ------------------------------------------------------------------
     # Output directories / CSV
