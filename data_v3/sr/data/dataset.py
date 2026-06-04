@@ -1,5 +1,4 @@
 from __future__ import annotations
-import io
 import json
 import random
 from collections import defaultdict
@@ -9,8 +8,8 @@ from typing import Optional
 
 import numpy as np
 import torch
+import torchvision.io as tvio
 import torchvision.transforms.functional as TF
-from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
@@ -152,15 +151,19 @@ class V3SupportResistanceDataset(Dataset):
         print(f"[dataset] Targets on CPU ({bytes_mb:.1f} MB).")
 
         # ------------------------------------------------------------------
-        # 4. Preload all JPEG bytes into RAM
+        # 4. Preload all JPEG bytes into RAM as bytearray
         # ------------------------------------------------------------------
-        # Eliminates disk I/O in __getitem__. 15K × ~50 KB ≈ 750 MB — well
-        # within Colab's RAM budget and far cheaper than per-batch disk reads.
-        self._img_cache: dict[str, bytes] = {}
+        # Eliminates disk I/O in __getitem__. 15K × ~50 KB ≈ 750 MB total.
+        # Stored as bytearray so torch.frombuffer can wrap without a copy,
+        # letting torchvision.io.decode_jpeg (libjpeg-turbo) decode 3-5× faster
+        # than PIL. num_workers=0 means no pickling required.
+        self._img_cache: dict[str, bytearray] = {}
         print(f"[dataset] Preloading {N} images into RAM…")
         for i in tqdm(self.indices, desc=f"  {split}", leave=False):
             img_id = self.records[i]["id"]
-            self._img_cache[img_id] = (self.images_dir / f"{img_id}.jpg").read_bytes()
+            self._img_cache[img_id] = bytearray(
+                (self.images_dir / f"{img_id}.jpg").read_bytes()
+            )
         cache_mb = sum(len(v) for v in self._img_cache.values()) / 1024 ** 2
         print(f"[dataset] Image cache: {cache_mb:.0f} MB in RAM.")
 
@@ -175,10 +178,9 @@ class V3SupportResistanceDataset(Dataset):
         record_idx = self.indices[idx]
         record = self.records[record_idx]
 
-        # Decode image from in-RAM bytes (no disk I/O)
-        raw = self._img_cache[record["id"]]
-        image = Image.open(io.BytesIO(raw)).convert("RGB")
-        image = TF.to_tensor(image)  # [3, H, W], float32 in [0, 1]
+        # Decode JPEG from RAM via libjpeg-turbo (3-5× faster than PIL)
+        raw_t = torch.frombuffer(self._img_cache[record["id"]], dtype=torch.uint8)
+        image  = tvio.decode_jpeg(raw_t).float().div_(255.0)  # [3, H, W] float32
 
         # Get precomputed target [5, H] (always CPU)
         target = self.targets[idx]
@@ -270,38 +272,29 @@ def build_dataloaders(
 
     _mixup_fn = partial(mixup_collate_fn, alpha=cfg.training.mixup_alpha)
 
-    # multiprocessing_context='spawn' starts clean worker processes that do not
-    # inherit the parent's CUDA context, avoiding cudaErrorInitializationError
-    # on Linux (Colab default fork would corrupt the CUDA driver state).
-    # sr/__init__.py re-adds the package root to sys.path so workers can import.
-    _ctx = "spawn"
+    # num_workers=0: images are preloaded into RAM as bytearrays, so __getitem__
+    # is pure CPU (libjpeg-turbo decode). No worker processes means no pickle
+    # overhead and no CUDA-fork corruption. The main thread keeps the GPU fed.
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.training.batch_size,
         shuffle=True,
-        num_workers=2,
-        persistent_workers=True,
-        prefetch_factor=2,
+        num_workers=0,
         collate_fn=_mixup_fn,
-        multiprocessing_context=_ctx,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=cfg.training.batch_size * 2,
         shuffle=False,
-        num_workers=2,
-        persistent_workers=True,
+        num_workers=0,
         collate_fn=eval_collate_fn,
-        multiprocessing_context=_ctx,
     )
     test_loader = DataLoader(
         test_ds,
         batch_size=cfg.training.batch_size * 2,
         shuffle=False,
-        num_workers=2,
-        persistent_workers=True,
+        num_workers=0,
         collate_fn=eval_collate_fn,
-        multiprocessing_context=_ctx,
     )
 
     print(
