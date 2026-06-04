@@ -86,7 +86,7 @@ class ModelConfig:
 
 @dataclass
 class TrainingConfig:
-    batch_size: int = 256
+    batch_size: int = 128
     num_epochs: int = 40
     lr_initial: float = 8e-4
     weight_decay: float = 1e-4
