@@ -132,7 +132,8 @@ class V3SupportResistanceDataset(Dataset):
         if precomputed_targets is not None:
             self.targets = precomputed_targets[self.indices]
         else:
-            # Compute from scratch for this split
+            # Compute on GPU for speed, store on CPU so DataLoader workers can access them.
+            # (Worker processes are forked and cannot use the parent's CUDA context.)
             split_records = [self.records[i] for i in self.indices]
             split_zones = [self.zone_lists[i] for i in self.indices]
 
@@ -143,33 +144,10 @@ class V3SupportResistanceDataset(Dataset):
                 price_ranges=[tuple(r["price_range"]) for r in split_records],
                 img_height=cfg.generator.image_height,
                 device=device,
-            )  # [N, 5, H]
+            ).cpu()  # move to CPU — workers cannot access GPU tensors across process boundaries
 
-        # ------------------------------------------------------------------
-        # 4. Optionally pin targets on GPU (VRAM check)
-        # ------------------------------------------------------------------
-        targets_on_gpu = False
-        if device.type == "cuda":
-            try:
-                bytes_needed = N * 5 * H * 4  # float32
-                free_vram, total_vram = torch.cuda.mem_get_info(device)
-                if bytes_needed < 0.8 * total_vram:
-                    self.targets = self.targets.to(device)
-                    targets_on_gpu = True
-                    print(
-                        f"[dataset] Targets pinned on GPU "
-                        f"({bytes_needed / 1024**2:.1f} MB / {total_vram / 1024**2:.0f} MB total VRAM)."
-                    )
-                else:
-                    print(
-                        f"[dataset] Targets kept on CPU (would use "
-                        f"{bytes_needed / 1024**2:.1f} MB, threshold "
-                        f"{0.8 * total_vram / 1024**2:.0f} MB)."
-                    )
-            except Exception as e:
-                print(f"[dataset] VRAM check failed ({e}); keeping targets on CPU.")
-
-        self._targets_on_gpu = targets_on_gpu
+        bytes_mb = self.targets.numel() * 4 / 1024 ** 2
+        print(f"[dataset] Targets on CPU ({bytes_mb:.1f} MB).")
 
     # ------------------------------------------------------------------
     # Dataset interface
@@ -187,10 +165,8 @@ class V3SupportResistanceDataset(Dataset):
         image = Image.open(img_path).convert("RGB")
         image = TF.to_tensor(image)  # [3, H, W], float32 in [0, 1]
 
-        # Get precomputed target [5, H]
+        # Get precomputed target [5, H] (always CPU)
         target = self.targets[idx]
-        if target.device.type != "cpu":
-            target = target.cpu()  # ensure CPU for collation
 
         zones = self.zone_lists[record_idx]
 
