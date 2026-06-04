@@ -284,14 +284,14 @@ def build_dataloaders(
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=cfg.training.batch_size * 2,
+        batch_size=cfg.training.batch_size,
         shuffle=False,
         num_workers=0,
         collate_fn=eval_collate_fn,
     )
     test_loader = DataLoader(
         test_ds,
-        batch_size=cfg.training.batch_size * 2,
+        batch_size=cfg.training.batch_size,
         shuffle=False,
         num_workers=0,
         collate_fn=eval_collate_fn,
